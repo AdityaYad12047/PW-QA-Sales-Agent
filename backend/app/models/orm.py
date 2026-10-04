@@ -16,8 +16,10 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
+
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -66,6 +68,9 @@ class Call(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="uploaded")
     failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     transcription_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
+    sarvam_job_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    audio_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), default=_now

@@ -26,6 +26,8 @@ export default function EvaluationPanel({
   segments = [],
   onJumpToEvidence,
   flaggedMoments = [],
+  onAnalyze,
+  isAnalyzing = false,
 }) {
   const [expandedCriteria, setExpandedCriteria] = useState({
     discovery: true,
@@ -66,13 +68,26 @@ export default function EvaluationPanel({
           padding: '24px',
         }}
       >
-        <Sparkles size={36} style={{ color: 'var(--primary)', opacity: 0.5 }} />
+        <Sparkles size={36} style={{ color: 'var(--primary)', opacity: isAnalyzing ? 1 : 0.5, animation: isAnalyzing ? 'spin 2s linear infinite' : 'none' }} />
         <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
-          No Evaluation Loaded
+          {isAnalyzing ? 'Evaluating Call…' : 'No Evaluation Loaded'}
         </div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '300px' }}>
-          Select a processed call from the dashboard or upload a new call to see AI scoring, rubric criteria, and coaching.
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '320px', lineHeight: 1.5 }}>
+          {isAnalyzing
+            ? 'Running AI rubric evaluation, criteria scoring, compliance checks, and coaching recommendations.'
+            : 'Transcription is complete. Click below to score this call against the rubric and view AI evaluation.'}
         </div>
+        {onAnalyze && (
+          <button
+            className="btn btn-primary btn-sm"
+            style={{ marginTop: '8px', gap: '6px' }}
+            onClick={onAnalyze}
+            disabled={isAnalyzing}
+          >
+            <Sparkles size={13} style={{ animation: isAnalyzing ? 'spin 1s linear infinite' : 'none' }} />
+            {isAnalyzing ? 'Evaluating…' : 'Run Evaluation'}
+          </button>
+        )}
       </div>
     );
   }

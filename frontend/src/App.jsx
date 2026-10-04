@@ -148,6 +148,27 @@ export default function App() {
     }
   };
 
+  // ── Polling for asynchronous transcription/evaluation lifecycle ──────────
+  useEffect(() => {
+    if (!currentCall?.id) return;
+    const pendingStatuses = ['uploaded', 'transcribing'];
+    if (!pendingStatuses.includes(currentCall.status)) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const updated = await apiJson(`/calls/${currentCall.id}`);
+        if (updated && updated.status !== currentCall.status) {
+          // Status changed! Refresh call data, transcript, evaluation, and audio availability
+          await loadCall(currentCall.id);
+        }
+      } catch {
+        // network blip; continue polling until terminal state or unmount
+      }
+    }, 2500);
+
+    return () => clearInterval(intervalId);
+  }, [currentCall?.id, currentCall?.status]);
+
   const handleRetranscribe = async () => {
     if (!currentCall) return;
     setIsRetranscribing(true);
@@ -451,6 +472,42 @@ export default function App() {
                 </div>
               )}
 
+              {/* ── Ready to Evaluate Banner ── */}
+              {currentCall?.status === 'transcribed' && !evaluation && (
+                <div
+                  style={{
+                    background: 'rgba(59, 130, 246, 0.1)',
+                    border: '1px solid var(--primary)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '12px 18px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Sparkles size={18} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Transcription Complete — Ready for QA Evaluation
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {segments.length} dialogue segments loaded. Run AI evaluation to score against the rubric.
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleAnalyzeCall}
+                    disabled={isAnalyzing}
+                  >
+                    <Sparkles size={13} style={{ animation: isAnalyzing ? 'spin 1s linear infinite' : 'none' }} />
+                    {isAnalyzing ? 'Evaluating…' : 'Run Evaluation'}
+                  </button>
+                </div>
+              )}
+
               {/* ── Failed Pipeline Banner (Section B.4) ── */}
               {currentCall?.status === 'failed' && (
                 <div
@@ -514,6 +571,8 @@ export default function App() {
                   segments={segments}
                   onJumpToEvidence={handleJumpToEvidence}
                   flaggedMoments={flaggedMoments}
+                  onAnalyze={handleAnalyzeCall}
+                  isAnalyzing={isAnalyzing}
                 />
               </div>
             </div>

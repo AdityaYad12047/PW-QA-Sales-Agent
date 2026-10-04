@@ -47,8 +47,10 @@ class CallOut(OrmBase):
     status: str
     failure_reason: Optional[str]
     transcription_mode: str = "auto"
+    sarvam_job_id: Optional[str] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+
 
 
 class CallListItemOut(BaseModel):

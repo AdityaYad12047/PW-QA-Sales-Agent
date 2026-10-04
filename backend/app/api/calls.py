@@ -17,12 +17,13 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.rubric import get_or_seed_active_rubric
 from app.config.rubric_loader import load_rubric_yaml
 from app.config.settings import get_settings
+from app.services.stt import get_stt_provider
 from app.db.engine import get_db
 from app.models.orm import (
     Call,
@@ -55,9 +56,78 @@ from app.pipeline.segments import NormalisedSegment
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calls", tags=["calls"])
 
-# Uploads are stored here (relative to CWD; in production mount a persistent volume)
-UPLOADS_DIR = Path("uploads")
-UPLOADS_DIR.mkdir(exist_ok=True)
+def _get_uploads_dir() -> Path:
+    settings = get_settings()
+    p = settings.uploads_dir
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _ensure_audio_file_on_disk(call: Call) -> Path:
+    """Ensure audio file exists on disk for processing, restoring from audio_data if needed."""
+    if call.file_path and Path(call.file_path).exists() and Path(call.file_path).stat().st_size > 0:
+        return Path(call.file_path)
+
+    if call.audio_data:
+        uploads_dir = _get_uploads_dir()
+        suffix = Path(call.original_filename or "audio.mp3").suffix.lower() or ".mp3"
+        hash_prefix = call.file_hash[:12] if call.file_hash else f"call_{call.id}"
+        dest = uploads_dir / f"restored_{call.id}_{hash_prefix}{suffix}"
+        dest.write_bytes(call.audio_data)
+        call.file_path = str(dest)
+        return dest
+
+    raise HTTPException(404, detail="Audio file data not found on disk or in database")
+
+
+def _dispatch_transcription(call: Call, mode: str, background_tasks: BackgroundTasks, db: Session) -> None:
+    """
+    Dispatch transcription:
+    - On Vercel / serverless: start an asynchronous Sarvam batch job and save job ID.
+    - Local development: use FastAPI BackgroundTasks for local execution.
+    """
+    settings = get_settings()
+    if settings.is_vercel_env or settings.effective_public_base_url:
+        try:
+            audio_path = _ensure_audio_file_on_disk(call)
+            provider = get_stt_provider()
+            callback_url = None
+            if settings.effective_public_base_url:
+                callback_url = f"{settings.effective_public_base_url}/api/webhooks/sarvam"
+                if settings.sarvam_webhook_token:
+                    callback_url += f"?token={settings.sarvam_webhook_token}"
+
+            job_id, err = provider.start_batch_job(
+                audio_path=audio_path,
+                mode=mode,
+                callback_url=callback_url,
+                callback_token=settings.sarvam_webhook_token or None,
+            )
+            if job_id:
+                call.sarvam_job_id = job_id
+                call.status = "transcribing"
+                call.failure_reason = None
+                db.commit()
+                db.refresh(call)
+                logger.info("Call %d dispatched to Sarvam async job %s", call.id, job_id)
+                return
+            else:
+                logger.warning("Failed to start Sarvam batch job for call %d: %s", call.id, err)
+                call.status = "failed"
+                call.failure_reason = (err.get("detail") if err else None) or "Failed to start Sarvam batch job"
+                db.commit()
+                db.refresh(call)
+                return
+        except Exception as exc:
+            logger.exception("Error initiating async batch job for call %d: %s", call.id, exc)
+            call.status = "failed"
+            call.failure_reason = str(exc)
+            db.commit()
+            db.refresh(call)
+            return
+
+    # Local development fallback: background task in current process
+    background_tasks.add_task(_run_pipeline_task, call.id, mode=mode)
 
 
 def _compute_file_hash(path: Path) -> str:
@@ -73,7 +143,7 @@ def get_upload_limits():
     """Return upload limits configured in environment."""
     settings = get_settings()
     return {
-        "max_upload_mb": settings.max_upload_mb,
+        "max_upload_mb": settings.effective_max_upload_mb,
         "max_upload_bytes": settings.max_upload_bytes,
         "max_audio_minutes": settings.max_audio_minutes,
         "allowed_audio_extensions": settings.allowed_audio_extensions_list,
@@ -120,12 +190,12 @@ async def upload_call(
     if content_length > settings.max_upload_bytes:
         raise HTTPException(
             413,
-            detail=f"File too large: {content_length / 1e6:.1f} MB > {settings.max_upload_mb} MB limit",
+            detail=f"File too large: {content_length / 1e6:.1f} MB > {settings.effective_max_upload_mb} MB limit",
         )
 
     # ── Save file to disk ─────────────────────────────────────────────────────
-    UPLOADS_DIR.mkdir(exist_ok=True)
-    tmp_path = UPLOADS_DIR / f"tmp_{int(time.time() * 1000)}_{file.filename}"
+    uploads_dir = _get_uploads_dir()
+    tmp_path = uploads_dir / f"tmp_{int(time.time() * 1000)}_{file.filename}"
     try:
         with open(tmp_path, "wb") as out:
             while chunk := await file.read(65536):
@@ -144,8 +214,11 @@ async def upload_call(
         tmp_path.unlink()
         raise HTTPException(
             413,
-            detail=f"File is {file_size / 1e6:.1f} MB, exceeds {settings.max_upload_mb} MB limit.",
+            detail=f"File is {file_size / 1e6:.1f} MB, exceeds {settings.effective_max_upload_mb} MB limit.",
         )
+
+    # Read binary bytes for durable database persistence (BYTEA)
+    file_bytes = tmp_path.read_bytes()
 
     # ── Compute hash and check for duplicates ─────────────────────────────────
     file_hash = _compute_file_hash(tmp_path)
@@ -157,16 +230,18 @@ async def upload_call(
             existing.status = "uploaded"
             existing.failure_reason = None
             existing.transcription_mode = mode
+            if not existing.audio_data:
+                existing.audio_data = file_bytes
             db.commit()
             db.refresh(existing)
-            background_tasks.add_task(_run_pipeline_task, existing.id, mode=mode)
+            _dispatch_transcription(existing, mode, background_tasks, db)
             return existing
         logger.info("Duplicate upload detected; returning existing call_id=%d", existing.id)
         return existing
 
     # ── Rename to final path with hash in filename ────────────────────────────
     suffix = Path(file.filename or "audio").suffix.lower() or ".bin"
-    final_path = UPLOADS_DIR / f"{file_hash[:16]}{suffix}"
+    final_path = uploads_dir / f"{file_hash[:16]}{suffix}"
     shutil.move(str(tmp_path), str(final_path))
 
     # ── Create Call record ────────────────────────────────────────────────────
@@ -178,24 +253,32 @@ async def upload_call(
         file_size_bytes=file_size,
         status="uploaded",
         transcription_mode=mode,
+        audio_data=file_bytes,
     )
     db.add(db_call)
     db.commit()
     db.refresh(db_call)
 
-    # ── Kick off background processing ────────────────────────────────────────
-    background_tasks.add_task(_run_pipeline_task, db_call.id, mode=mode)
+    # ── Dispatch processing (async Sarvam on Vercel, background tasks locally) ──
+    _dispatch_transcription(db_call, mode, background_tasks, db)
 
     logger.info("call_id=%d accepted for processing (mode=%s)", db_call.id, mode)
     return db_call
 
 
 def _run_pipeline_task(call_id: int, mode: Optional[str] = None) -> None:
-    """Background task wrapper: creates its own DB session."""
+    """Background task wrapper: creates its own DB session, runs STT, then evaluates."""
     from app.db.engine import SessionLocal
     db = SessionLocal()
     try:
         run_transcription_pipeline(call_id, db, mode=mode)
+        call = db.get(Call, call_id)
+        if call and call.status == "transcribed":
+            try:
+                run_evaluation_pipeline(call_id, db)
+                logger.info("Auto-evaluation completed for call_id=%d", call_id)
+            except Exception as eval_exc:
+                logger.exception("Evaluation pipeline failed for call %d: %s", call_id, eval_exc)
     finally:
         db.close()
 
@@ -207,7 +290,7 @@ def retry_call(
     db: Session = Depends(get_db),
 ):
     """
-    Retry a failed call. Clears failure_reason and restarts background transcription.
+    Retry a failed call. Clears failure_reason and restarts transcription.
     """
     call = db.get(Call, call_id)
     if not call:
@@ -218,7 +301,7 @@ def retry_call(
     db.commit()
     db.refresh(call)
 
-    background_tasks.add_task(_run_pipeline_task, call.id, mode=call.transcription_mode)
+    _dispatch_transcription(call, call.transcription_mode or "auto", background_tasks, db)
     return call
 
 
@@ -226,6 +309,7 @@ def retry_call(
 def retranscribe_call(
     call_id: int,
     payload: RetranscribeRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
@@ -248,9 +332,14 @@ def retranscribe_call(
     call.status = "transcribing"
     call.failure_reason = None
     db.commit()
-
-    run_transcription_pipeline(call.id, db, mode=mode)
     db.refresh(call)
+
+    settings = get_settings()
+    if settings.is_vercel_env or settings.effective_public_base_url:
+        _dispatch_transcription(call, mode, background_tasks, db)
+    else:
+        run_transcription_pipeline(call.id, db, mode=mode)
+        db.refresh(call)
     return call
 
 @router.get("", response_model=list[CallListItemOut])
@@ -291,15 +380,36 @@ def list_calls(
 
 @router.get("/{call_id}/audio")
 def get_call_audio(call_id: int, db: Session = Depends(get_db)):
-    """Stream audio file for the call."""
+    """
+    Stream audio file for the call.
+    Prioritizes durable database audio_data (BYTEA) across serverless invocations,
+    falling back to local file on disk for local development.
+    """
     call = db.get(Call, call_id)
     if call is None:
         raise HTTPException(404, detail=f"Call {call_id} not found")
-    if not call.file_path or not Path(call.file_path).exists():
-        raise HTTPException(404, detail="Audio file not found on disk")
-    suffix = Path(call.file_path).suffix.lower()
-    media_type = "audio/mpeg" if suffix in (".mp3", ".mpeg") else "audio/wav" if suffix == ".wav" else "audio/mp4"
-    return FileResponse(call.file_path, media_type=media_type)
+
+    # 1. Prefer durable database audio_data
+    if call.audio_data:
+        suffix = Path(call.original_filename or call.file_path or "audio.mp3").suffix.lower()
+        media_type = "audio/mpeg" if suffix in (".mp3", ".mpeg") else "audio/wav" if suffix == ".wav" else "audio/mp4"
+        return Response(
+            content=call.audio_data,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'inline; filename="{call.original_filename or "audio"}"',
+                "Content-Length": str(len(call.audio_data)),
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    # 2. Fall back to local file on disk
+    if call.file_path and Path(call.file_path).exists():
+        suffix = Path(call.file_path).suffix.lower()
+        media_type = "audio/mpeg" if suffix in (".mp3", ".mpeg") else "audio/wav" if suffix == ".wav" else "audio/mp4"
+        return FileResponse(call.file_path, media_type=media_type)
+
+    raise HTTPException(404, detail="Audio file not found on disk or in database")
 
 
 @router.get("/{call_id}", response_model=CallOut)

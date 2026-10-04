@@ -89,6 +89,24 @@ class SpeechToText(ABC):
         """
         ...
 
+    def start_batch_job(
+        self,
+        audio_path: Path,
+        mode: str = "auto",
+        callback_url: Optional[str] = None,
+        callback_token: Optional[str] = None,
+    ) -> tuple[str, Optional[dict]]:
+        """
+        Initiate a batch transcription job with optional webhook callback.
+        Returns (job_id, None) on success, or ("", {"reason": str, "detail": str}) on error.
+        """
+        return "", {"reason": "not_implemented", "detail": "Provider does not support asynchronous jobs."}
+
+    def fetch_job_result(self, job_id: str, mode: str = "auto") -> STTResult:
+        """Fetch and parse output for a completed batch job."""
+        return STTResult(success=False, failure_reason="not_implemented")
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache helpers
@@ -359,7 +377,102 @@ class SarvamSTT(SpeechToText):
         # ── Download and parse results ────────────────────────────────────────
         return self._parse_job_result(job, mode=mode, requested_lang=lang_code)
 
+    def start_batch_job(
+        self,
+        audio_path: Path,
+        mode: str = "auto",
+        callback_url: Optional[str] = None,
+        callback_token: Optional[str] = None,
+    ) -> tuple[str, Optional[dict]]:
+        """
+        Create and start a Sarvam batch diarization job asynchronously.
+        Optionally configures a callback webhook.
+        Returns (job_id, None) on success or ("", error_dict) on failure.
+        """
+        validation_error = self._validate_file(audio_path)
+        if validation_error:
+            return "", validation_error
+
+        if not self._api_key:
+            return "", {
+                "reason": "missing_api_key",
+                "detail": "SARVAM_API_KEY is not set. Add it to your .env file.",
+            }
+
+        try:
+            from sarvamai import SarvamAI
+        except ImportError:
+            return "", {
+                "reason": "sdk_not_installed",
+                "detail": "sarvamai package not installed.",
+            }
+
+        lang_code = None
+        if mode == "hi":
+            lang_code = "hi-IN"
+        elif mode == "en":
+            lang_code = "en-IN"
+
+        try:
+            client = SarvamAI(api_subscription_key=self._api_key)
+            callback_params = None
+            if callback_url:
+                callback_params = {"url": callback_url}
+                if callback_token:
+                    callback_params["auth_token"] = callback_token
+
+            job = client.speech_to_text_job.create_job(
+                model=self.MODEL,
+                mode="transcribe",
+                with_diarization=True,
+                language_code=lang_code,
+                callback=callback_params if callback_params else None,
+            )
+            job.upload_files(file_paths=[str(audio_path)])
+            job.start()
+            return job.job_id, None
+        except Exception as exc:
+            error_str = str(exc).lower()
+            if "rate" in error_str or "429" in error_str:
+                reason = "rate_limit"
+            elif "timeout" in error_str:
+                reason = "timeout"
+            elif "auth" in error_str or "401" in error_str or "403" in error_str:
+                reason = "auth_error"
+            else:
+                reason = "provider_error"
+            logger.warning("Sarvam start_batch_job error (%s): %s", reason, exc)
+            return "", {"reason": reason, "detail": str(exc)}
+
+    def fetch_job_result(self, job_id: str, mode: str = "auto") -> STTResult:
+        """Fetch and parse output for a completed Sarvam batch job."""
+        if not self._api_key:
+            return STTResult(
+                success=False,
+                provider=self.PROVIDER,
+                failure_reason="missing_api_key",
+                failure_detail="SARVAM_API_KEY is not set.",
+                mode=mode,
+            )
+
+        try:
+            from sarvamai import SarvamAI
+            client = SarvamAI(api_subscription_key=self._api_key)
+            job = client.speech_to_text_job.get_job(job_id=job_id)
+            lang_code = "hi-IN" if mode == "hi" else ("en-IN" if mode == "en" else None)
+            return self._parse_job_result(job, mode=mode, requested_lang=lang_code)
+        except Exception as exc:
+            logger.exception("Failed to fetch Sarvam job %s: %s", job_id, exc)
+            return STTResult(
+                success=False,
+                provider=self.PROVIDER,
+                failure_reason="fetch_job_error",
+                failure_detail=str(exc),
+                mode=mode,
+            )
+
     def _parse_job_result(self, job, mode: str = "auto", requested_lang: Optional[str] = None) -> STTResult:
+
         """
         Download the job output to a temp directory, parse the JSON files,
         and return a STTResult.

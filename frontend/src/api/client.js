@@ -5,7 +5,11 @@
  * and "Cannot reach the server at <url>" when connection cannot be established.
  */
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL !== undefined
+    ? import.meta.env.VITE_API_BASE_URL
+    : (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '/api')
+).replace(/\/$/, '');
 
 export function getDemoAccessToken() {
   return import.meta.env.VITE_DEMO_ACCESS_TOKEN || localStorage.getItem('demo_access_token') || '';

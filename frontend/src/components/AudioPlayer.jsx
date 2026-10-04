@@ -9,6 +9,7 @@ import {
   RotateCcw,
   AlertTriangle,
 } from 'lucide-react';
+import { API_BASE_URL } from '../api/client';
 
 /**
  * AudioPlayer — real <audio> element backed by GET /calls/{id}/audio.
@@ -39,7 +40,7 @@ export default function AudioPlayer({
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [audioError, setAudioError] = useState(null);
 
-  const src = callId ? `/calls/${callId}/audio` : null;
+  const src = callId ? `${API_BASE_URL || ''}/calls/${callId}/audio` : null;
 
   // ── Seek from parent (evidence / flag clicks) ────────────────────────────
   useEffect(() => {

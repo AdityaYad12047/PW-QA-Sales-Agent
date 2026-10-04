@@ -20,6 +20,7 @@ from app.api import calls as calls_router
 from app.api import counsellors as counsellors_router
 from app.api import rubric as rubric_router
 from app.api import settings as settings_router
+from app.api import webhooks as webhooks_router
 from app.models.schemas import ErrorOut, HealthOut
 
 
@@ -79,6 +80,11 @@ app.add_middleware(
 # ── Demo Access Token Protection for Mutating Endpoints ──────────────────────
 @app.middleware("http")
 async def demo_access_token_middleware(request: Request, call_next):
+    # Webhooks have their own provider authentication (e.g. SARVAM_WEBHOOK_TOKEN)
+    path = request.url.path
+    if "/webhooks/" in path or path.endswith("/webhooks/sarvam"):
+        return await call_next(request)
+
     current_settings = get_settings()
     if current_settings.demo_access_token and request.method in ("POST", "PUT", "PATCH", "DELETE"):
         auth_header = request.headers.get("Authorization", "")
@@ -97,14 +103,24 @@ async def demo_access_token_middleware(request: Request, call_next):
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────
+# Standard routes
 app.include_router(calls_router.router)
 app.include_router(counsellors_router.router)
 app.include_router(rubric_router.router)
 app.include_router(settings_router.router)
+app.include_router(webhooks_router.router)
+
+# Also mount under /api prefix for seamless Vercel /api/* rewrite routing
+app.include_router(calls_router.router, prefix="/api")
+app.include_router(counsellors_router.router, prefix="/api")
+app.include_router(rubric_router.router, prefix="/api")
+app.include_router(settings_router.router, prefix="/api")
+app.include_router(webhooks_router.router, prefix="/api")
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health", response_model=HealthOut, tags=["meta"])
+@app.get("/api/health", response_model=HealthOut, tags=["meta"])
 def health(request: Request):
     from sqlalchemy import text
     try:

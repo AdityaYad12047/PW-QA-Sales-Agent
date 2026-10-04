@@ -36,8 +36,10 @@ class Settings(BaseSettings):
     # ── CORS ──────────────────────────────────────────────────────────────────
     cors_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000"
 
-    # ── Security / Demo Access ────────────────────────────────────────────────
+    # ── Security & Webhooks ───────────────────────────────────────────────────
     demo_access_token: str = ""
+    sarvam_webhook_token: str = ""
+    public_base_url: str = ""
 
     # ── App ───────────────────────────────────────────────────────────────────
     log_level: str = "INFO"
@@ -53,16 +55,31 @@ class Settings(BaseSettings):
     cache_dir: str = ".cache"
 
     @property
+    def is_vercel_env(self) -> bool:
+        import os
+        return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"))
+
+    @property
     def default_db_path(self) -> Path:
-        backend_dir = Path(__file__).resolve().parent.parent.parent
-        data_dir = backend_dir / "data"
+        if self.is_vercel_env:
+            data_dir = Path("/tmp/data")
+        else:
+            backend_dir = Path(__file__).resolve().parent.parent.parent
+            data_dir = backend_dir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir / "pw_qa.db"
 
     @property
     def effective_database_url(self) -> str:
         if self.database_url and self.database_url != "sqlite:///./pw_qa.db":
-            return self.database_url
+            url = self.database_url.strip()
+            if url.startswith("spostgresql://"):
+                url = "postgresql://" + url[len("spostgresql://"):]
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql+psycopg://", 1)
+            elif url.startswith("postgresql://") and "+psycopg" not in url:
+                url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+            return url
         return f"sqlite:///{self.default_db_path.resolve().as_posix()}"
 
     @property
@@ -73,15 +90,53 @@ class Settings(BaseSettings):
 
     @property
     def cache_path(self) -> Path:
-        return Path(self.cache_dir)
+        if self.is_vercel_env:
+            p = Path("/tmp") / self.cache_dir.lstrip("./")
+        else:
+            p = Path(self.cache_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+
+    @property
+    def uploads_dir(self) -> Path:
+        if self.is_vercel_env:
+            p = Path("/tmp/uploads")
+        else:
+            p = Path("uploads")
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def effective_max_upload_mb(self) -> int:
+        # Vercel serverless request body limit is 4.5 MB.
+        if self.is_vercel_env:
+            return min(self.max_upload_mb, 4)
+        return self.max_upload_mb
 
     @property
     def max_upload_bytes(self) -> int:
-        return self.max_upload_mb * 1024 * 1024
+        return self.effective_max_upload_mb * 1024 * 1024
 
     @property
     def allowed_audio_extensions_list(self) -> list[str]:
         return [f".{ext.strip().lstrip('.').lower()}" for ext in self.allowed_audio_extensions.split(",") if ext.strip()]
+
+    @property
+    def effective_public_base_url(self) -> str:
+        if self.public_base_url:
+            base = self.public_base_url.strip()
+            if not base.startswith("http://") and not base.startswith("https://"):
+                base = f"https://{base}"
+            return base.rstrip("/")
+        import os
+        vercel_prod = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
+        if vercel_prod:
+            return f"https://{vercel_prod.strip().rstrip('/')}"
+        vercel_url = os.environ.get("VERCEL_URL")
+        if vercel_url:
+            return f"https://{vercel_url.strip().rstrip('/')}"
+        return ""
 
 
 @lru_cache
