@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]  # so `from app.xxx` works without install
+asyncio_mode = "auto"
+markers = [
+    "eval: marks tests as evaluation regression tests (deselect with '-m not eval')",
+]

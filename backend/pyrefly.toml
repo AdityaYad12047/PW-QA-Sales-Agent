@@ -1,0 +1,14 @@
+python-interpreter-path = "C:/Users/Aditya Yadav/AppData/Local/Programs/Python/Python313/python.exe"
+project-includes = [
+    "**/*.py",
+]
+search-path = [
+    ".",
+    "C:/Users/Aditya Yadav/AppData/Local/Programs/Python/Python313/Lib/site-packages",
+]
+python-platform = "win32"
+python-version = "3.13.0"
+infer-with-first-use = false
+
+[errors]
+missing-import = "ignore"

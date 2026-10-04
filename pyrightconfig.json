@@ -1,0 +1,13 @@
+{
+  "include": [
+    "backend",
+    "scripts"
+  ],
+  "extraPaths": [
+    "backend",
+    "C:\\Users\\Aditya Yadav\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages"
+  ],
+  "pythonPlatform": "Windows",
+  "pythonVersion": "3.13",
+  "reportMissingImports": "none"
+}

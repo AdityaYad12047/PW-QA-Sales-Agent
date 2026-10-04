@@ -1,0 +1,102 @@
+version: 1
+name: "PW Counselling Quality Rubric v1"
+description: "Standard 6-dimension evaluation rubric for student/parent counselling calls (Hindi / Hinglish / English)."
+
+# Severity to score mapping for the compliance criterion:
+# - no_flags: 4
+# - minor_only: 3
+# - one_major: 2
+# - multiple_major: 1
+# - any_critical: 0 (and triggers needs_review gate)
+compliance_scoring:
+  no_flags: 4
+  minor_only: 3
+  one_major: 2
+  multiple_major: 1
+  any_critical: 0
+
+# Review Gate Threshold:
+# Calls with an overall weighted score (0-100) strictly below this threshold
+# are automatically marked with status='needs_review' for supervisor inspection.
+min_overall_score_for_review: 50.0
+min_confidence_for_gate: 0.70
+low_confidence_display_threshold: 0.70
+
+criteria:
+  - criterion_id: "discovery"
+    title: "Discovery / Needs Understanding"
+    weight: 20
+    description: "Understands student context (class, target exam, target year, prep status, goal, learning mode, key concern)."
+    anchors:
+      0: "Absent/Wrong: Did not ask about student class, exam, or current preparation status; made blind assumptions."
+      1: "Weak: Asked only superficial questions (e.g., just class/exam) but ignored current prep status, weak areas, or goals."
+      2: "Adequate: Discovered basic facts (class, target exam, target year) but did not probe deeply into study routine or pain points."
+      3: "Good: Thoroughly probed current preparation, strengths/weaknesses, goals, and learning preference; listened actively."
+      4: "Excellent: Complete diagnostic discovery covering student background, academic gaps, past performance, and emotional drivers."
+    good_example: "Aapka 11th mein physics kaisa raha? Kin topics mein doubt aa raha hai aur mock tests mein average score kya chal raha hai?"
+    bad_example: "Arrey seedha hamara batch le lo, sab kuch ho jayega bina kisi dikkat ke."
+
+  - criterion_id: "course_fit"
+    title: "Product / Course Fit"
+    weight: 20
+    description: "Recommendation matches discovered needs with reasoning given (batch type, teachers, study material, doubt support)."
+    anchors:
+      0: "Absent/Wrong: Recommended an unsuitable batch or pushed a generic product without linking to student stated needs."
+      1: "Weak: Mentioned a course name but provided no clear rationale why it fits student class, exam year, or preparation level."
+      2: "Adequate: Recommended correct batch matching class/exam, but gave generic feature explanations without tying to pain points."
+      3: "Good: Recommended appropriate batch and explicitly linked key features (live classes, DPPs, tests) to student stated weaknesses."
+      4: "Excellent: Tailored course recommendation with precise rationale addressing specific diagnostic needs, comparing options thoughtfully."
+    good_example: "Aapne bataya ki concept clear hai par practice kam hui hai, isliye Arjuna JEE batch mein daily practice problems (DPP) aur video solutions best fit rahenge."
+    bad_example: "Hamara sabse mehnga batch le lijiye, baaki sab baad mein dekhenge."
+
+  - criterion_id: "pitch_quality"
+    title: "Pitch Quality"
+    weight: 15
+    description: "Clarity, structure, personalization, value proposition, tone, and pacing."
+    anchors:
+      0: "Absent/Wrong: Confusing, monologue-heavy, disrespectful, or completely unstructured sales pitch."
+      1: "Weak: Rushed or monotonous reading of generic bullet points; minimal personalization or engagement."
+      2: "Adequate: Clear delivery and polite tone, explained main batch offerings, but felt somewhat scripted or one-sided."
+      3: "Good: Structured, engaging presentation of value proposition; maintained conversational dialogue and highlighted PW strengths."
+      4: "Excellent: Highly engaging, consultative, and structured delivery; articulated unique PW value (affordable excellence, top faculty, doubt engine)."
+    good_example: "PW par hamara focus affordable quality education par hai. Arjuna batch mein aapko top faculties ke structured lectures ke sath 24x7 doubt engine milta hai."
+    bad_example: "Bas aaj offer chal raha hai, jaldi le lo nahi toh discount khatam ho jayega."
+
+  - criterion_id: "objection_handling"
+    title: "Objection Handling"
+    weight: 20
+    description: "Addresses concerns around price, scholarship, 'discuss with parents', competitors, 'join later', online vs offline discipline."
+    anchors:
+      0: "Absent/Wrong: Dismissive, defensive, or ignored student/parent objections; gave false reassurance or pressured aggressively."
+      1: "Weak: Acknowledged concern but provided weak or evasive responses without resolving the underlying hesitation."
+      2: "Adequate: Answered basic questions (price breakdown, installment info) but failed to provide convincing value justification."
+      3: "Good: Empathetically addressed objections with logical reasoning, batch flexibility, demo options, or clear comparison."
+      4: "Excellent: Masterfully reframed objections into value discussions, validated parent/student hesitation with empathy, provided concrete solutions."
+    good_example: "Main samajh sakta hoon ki parents se discuss karna zaroori hai. Main aapko summary PDF aur syllabus checklist WhatsApp kar deta hoon taaki aap parents ke sath review kar sakein."
+    bad_example: "Parents se kya puchna, agar doctor/engineer banna hai toh abhi enroll karo, baad mein pachtaoge."
+
+  - criterion_id: "compliance"
+    title: "Compliance / Accuracy"
+    weight: 15
+    description: "Adherence to demo compliance policy (no fake guarantees, accurate fee quotes, refund clarity, ethical counselling)."
+    anchors:
+      0: "Absent/Wrong: Critical violation (guaranteed rank/selection, fake refund promise, disparaged competitors)."
+      1: "Weak: Multiple major policy violations or repeated inaccurate claims regarding fee/refund/batch access."
+      2: "Adequate: Minor discrepancy or borderline claims, but no critical violations; generally accurate information."
+      3: "Good: Fully compliant with all policy guidelines; transparent pricing, realistic preparation advice, and ethical conduct."
+      4: "Excellent: Exemplary adherence; explicitly set realistic expectations, proactively clarified refund policy and batch validity with 100% transparency."
+    good_example: "PW mein hum best quality teaching aur doubt support provide karte hain, lekin rank student ki consistent mehnat aur regular practice se aati hai."
+    bad_example: "100% AIR under 100 guaranteed hai, hamare batch se hi sabka selection hota hai."
+
+  - criterion_id: "closing_next_steps"
+    title: "Closing / Next Steps"
+    weight: 10
+    description: "Clear next action, timeline, follow-up scheduling, and student/parent confirmation."
+    anchors:
+      0: "Absent/Wrong: Call ended abruptly without any next steps, summary, or confirmation."
+      1: "Weak: Vague closing ('theek hai aap dekh lijiye'); no definite time, follow-up plan, or next action."
+      2: "Adequate: Mentioned next step (sending link) but didn't confirm contact details or set a specific follow-up time."
+      3: "Good: Clear next step agreed upon (link sent on WhatsApp, callback scheduled for specific time)."
+      4: "Excellent: Structured summary of discussion, confirmed WhatsApp registration, scheduled convenient follow-up, and left contact details."
+    good_example: "Maine aapke registered WhatsApp number par batch details aur payment link bhej diya hai. Kal sham 4 baje main follow-up call karunga taaki aapka koi doubt na rahe."
+    bad_example: "Chalye bye, link bheja hai dekh lena."
