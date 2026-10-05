@@ -16,6 +16,12 @@
 
 <br/>
 
+<a href="https://pw-qa-sales-agent-5vht.vercel.app/">
+  <img src="https://img.shields.io/badge/🚀%20LIVE%20DEMO-Try%20the%20Platform-6C63FF?style=for-the-badge" alt="Live Demo"/>
+</a>
+
+<br/><br/>
+
 <a href="#-overview">
   <img src="https://img.shields.io/badge/AI-Quality_Assurance-6C63FF?style=for-the-badge&logo=openai&logoColor=white" alt="AI QA"/>
 </a>
@@ -38,9 +44,33 @@
 
 <br/>
 
+<a href="https://pw-qa-sales-agent-5vht.vercel.app/">
+  <strong>🔴 LIVE APPLICATION → https://pw-qa-sales-agent-5vht.vercel.app/</strong>
+</a>
+
+<br/><br/>
+
 <img src="https://readme-typing-svg.demolab.com?font=Inter&weight=600&size=20&duration=3000&pause=1000&color=6C63FF&center=true&vCenter=true&width=800&lines=Transcribe+%E2%86%92+Analyze+%E2%86%92+Verify+%E2%86%92+Score+%E2%86%92+Coach;AI+finds+evidence.+Code+verifies+it.;Built+for+auditable+AI-powered+call+QA." alt="Typing animation"/>
 
-<br/>
+</div>
+
+---
+
+## 🚀 Live Demo
+
+<div align="center">
+
+### Try the deployed application
+
+<a href="https://pw-qa-sales-agent-5vht.vercel.app/">
+
+<img src="https://img.shields.io/badge/OPEN%20LIVE%20APPLICATION-6C63FF?style=for-the-badge&logo=vercel&logoColor=white" alt="Open Live Application"/>
+
+</a>
+
+<br/><br/>
+
+**👉 [Launch PW Counselling QA Platform](https://pw-qa-sales-agent-5vht.vercel.app/)**
 
 </div>
 
