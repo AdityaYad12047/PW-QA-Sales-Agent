@@ -10,6 +10,7 @@ the evaluation pipeline.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, Request
@@ -101,10 +102,69 @@ async def sarvam_webhook(
             },
         )
 
-    job_id = body.get("job_id")
+    # ================================================================
+    # IMPORTANT DIAGNOSTIC LOGGING
+    #
+    # We have already confirmed that Sarvam reaches this endpoint.
+    # The production logs showed:
+    #
+    #   Unknown Sarvam job_state='' for job_id=...
+    #
+    # Therefore, log the exact payload received from Sarvam so we can
+    # match our parser to the real production payload.
+    #
+    # This does NOT log API keys or callback authentication tokens.
+    # ================================================================
+
+    logger.warning(
+        "Sarvam webhook raw payload: %s",
+        json.dumps(
+            body,
+            default=str,
+            ensure_ascii=False,
+        ),
+    )
+
+    # ================================================================
+    # 3. Extract job ID and job state
+    # ================================================================
+
+    # Sarvam normally sends these at the top level.
+    #
+    # We also defensively inspect common nested containers so that
+    # a wrapper/proxy response does not cause the state to be lost.
+    payload = body
+
+    for container_key in (
+        "data",
+        "result",
+        "payload",
+    ):
+        nested = body.get(container_key)
+
+        if isinstance(nested, dict):
+            if (
+                nested.get("job_id")
+                or nested.get("job_state")
+                or nested.get("jobState")
+                or nested.get("jobId")
+            ):
+                payload = nested
+                break
+
+    job_id = (
+        body.get("job_id")
+        or body.get("jobId")
+        or payload.get("job_id")
+        or payload.get("jobId")
+    )
 
     job_state = str(
-        body.get("job_state") or ""
+        body.get("job_state")
+        or body.get("jobState")
+        or payload.get("job_state")
+        or payload.get("jobState")
+        or ""
     ).strip().lower()
 
     if not job_id:
@@ -128,7 +188,7 @@ async def sarvam_webhook(
     )
 
     # ================================================================
-    # 3. Find call
+    # 4. Find call
     # ================================================================
 
     call = (
@@ -149,7 +209,7 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 4. Idempotency
+    # 5. Idempotency
     # ================================================================
 
     if call.status in (
@@ -170,9 +230,8 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 5. Intermediate Sarvam states
+    # 6. Intermediate Sarvam states
     #
-    # IMPORTANT:
     # Do NOT attempt to download transcript here.
     # ================================================================
 
@@ -200,13 +259,15 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 6. Failed job
+    # 7. Failed job
     # ================================================================
 
     if job_state == "failed":
         error_msg = (
             body.get("error_message")
             or body.get("error")
+            or payload.get("error_message")
+            or payload.get("error")
             or "Sarvam job reported failure"
         )
 
@@ -228,7 +289,7 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 7. Only Completed can continue
+    # 8. Only Completed can continue
     # ================================================================
 
     if job_state != "completed":
@@ -251,7 +312,7 @@ async def sarvam_webhook(
     )
 
     # ================================================================
-    # 8. Fetch completed transcript
+    # 9. Fetch completed transcript
     # ================================================================
 
     provider = get_stt_provider()
@@ -287,7 +348,7 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 9. Record STT run
+    # 10. Record STT run
     # ================================================================
 
     stt_run = SttRun(
@@ -331,7 +392,7 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 10. Duration
+    # 11. Duration
     # ================================================================
 
     if stt_result.audio_duration_seconds:
@@ -340,7 +401,7 @@ async def sarvam_webhook(
         )
 
     # ================================================================
-    # 11. Normalize transcript
+    # 12. Normalize transcript
     # ================================================================
 
     segments = normalise_segments(
@@ -365,7 +426,7 @@ async def sarvam_webhook(
         }
 
     # ================================================================
-    # 12. Map speaker roles
+    # 13. Map speaker roles
     # ================================================================
 
     role_result = map_roles(segments)
@@ -384,7 +445,7 @@ async def sarvam_webhook(
         )
 
     # ================================================================
-    # 13. Create TranscriptVersion
+    # 14. Create TranscriptVersion
     # ================================================================
 
     latest_ver = (
@@ -446,7 +507,7 @@ async def sarvam_webhook(
     db.flush()
 
     # ================================================================
-    # 14. Persist transcript segments
+    # 15. Persist transcript segments
     # ================================================================
 
     for idx, seg in enumerate(
@@ -478,7 +539,7 @@ async def sarvam_webhook(
         db.add(db_seg)
 
     # ================================================================
-    # 15. Invalidate older evaluations
+    # 16. Invalidate older evaluations
     # ================================================================
 
     existing_evals = (
@@ -496,7 +557,7 @@ async def sarvam_webhook(
         )
 
     # ================================================================
-    # 16. Mark transcription complete
+    # 17. Mark transcription complete
     # ================================================================
 
     call.status = "transcribed"
@@ -511,7 +572,7 @@ async def sarvam_webhook(
     )
 
     # ================================================================
-    # 17. Run evaluation
+    # 18. Run evaluation
     # ================================================================
 
     try:
