@@ -57,13 +57,13 @@
 
 <a href="https://pw-qa-sales-agent-5vht.vercel.app/">
 
-<img src="https://img.shields.io/badge/OPEN%20LIVE%20APPLICATION-6C63FF?style=for-the-badge&logo=vercel&logoColor=white" alt="Open Live Application"/>
+<img src="https://img.shields.io/badge/OPEN%20LIVE%20APPLICATION-6C63FF?style=for-the-badge&logo=vercel&logoColor=white" alt="Demo Video"/>
 
 </a>
 
 <br/><br/>
 
-**👉 [Launch PW Counselling QA Platform](https://pw-qa-sales-agent-5vht.vercel.app/)**
+**👉 [Demo Video Link](https://drive.google.com/file/d/166ryEVB9qJ6Xzt8hrJPEcrxHD6QJ8LB1/view?usp=drive_link)**
 
 </div>
 
