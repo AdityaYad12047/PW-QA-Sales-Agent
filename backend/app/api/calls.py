@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
@@ -160,107 +159,167 @@ def _dispatch_transcription(
     db: Session,
 ) -> None:
     """
-    Dispatch transcription.
+    Dispatch transcription using the configured STT provider.
 
-    Vercel / serverless:
-        Start asynchronous Sarvam batch job and save the job ID.
+    Groq:
+        Uses the existing transcription pipeline through FastAPI
+        BackgroundTasks. The pipeline restores durable audio_data from
+        PostgreSQL into the current invocation's writable filesystem.
 
-    Local development:
-        Use FastAPI BackgroundTasks and execute the existing local
-        transcription pipeline.
+    Sarvam:
+        Keeps the existing asynchronous batch-job + webhook flow.
+
+    This function deliberately keeps both paths explicit so that changing
+    STT_PROVIDER cannot accidentally send a Groq job through the Sarvam
+    webhook architecture.
     """
     settings = get_settings()
+    provider_name = (settings.stt_provider or "sarvam").strip().lower()
 
     # ------------------------------------------------------------------
-    # Vercel / public deployment
+    # GROQ
     # ------------------------------------------------------------------
-
-    if settings.is_vercel_env or settings.effective_public_base_url:
+    if provider_name == "groq":
         try:
-            audio_path = _ensure_audio_file_on_disk(call)
+            # Verify that the audio can be restored before scheduling the
+            # transcription task. This is especially important on Vercel,
+            # where the local filesystem is ephemeral.
+            _ensure_audio_file_on_disk(call)
 
-            provider = get_stt_provider()
-
-            callback_url = None
-
-            if settings.effective_public_base_url:
-                callback_url = (
-                    f"{settings.effective_public_base_url}"
-                    "/api/webhooks/sarvam"
-                )
-
-                if settings.sarvam_webhook_token:
-                    callback_url += (
-                        f"?token={settings.sarvam_webhook_token}"
-                    )
-
-            job_id, err = provider.start_batch_job(
-                audio_path=audio_path,
-                mode=mode,
-                callback_url=callback_url,
-                callback_token=settings.sarvam_webhook_token or None,
-            )
-
-            if job_id:
-                call.sarvam_job_id = job_id
-                call.status = "transcribing"
-                call.failure_reason = None
-
-                db.commit()
-                db.refresh(call)
-
-                logger.info(
-                    "Call %d dispatched to Sarvam async job %s",
-                    call.id,
-                    job_id,
-                )
-
-                return
-
-            logger.warning(
-                "Failed to start Sarvam batch job for call %d: %s",
-                call.id,
-                err,
-            )
-
-            call.status = "failed"
-
-            call.failure_reason = (
-                err.get("detail")
-                if err
-                else None
-            ) or "Failed to start Sarvam batch job"
+            call.status = "transcribing"
+            call.failure_reason = None
 
             db.commit()
             db.refresh(call)
+
+            logger.info(
+                "Call %d dispatched to Groq STT",
+                call.id,
+            )
+
+            background_tasks.add_task(
+                _run_pipeline_task,
+                call.id,
+                mode=mode,
+            )
 
             return
 
         except Exception as exc:
             logger.exception(
-                "Error initiating async batch job for call %d: %s",
+                "Error dispatching Groq transcription for call %d",
                 call.id,
-                exc,
             )
 
             call.status = "failed"
-            call.failure_reason = str(exc)
+            call.failure_reason = f"groq_dispatch_failed: {exc}"
 
             db.commit()
             db.refresh(call)
-
             return
 
     # ------------------------------------------------------------------
-    # Local development
+    # SARVAM
     # ------------------------------------------------------------------
+    if provider_name == "sarvam":
+        # Sarvam remains asynchronous in production because its batch API
+        # reports completion through the webhook endpoint.
+        if settings.is_vercel_env or settings.effective_public_base_url:
+            try:
+                audio_path = _ensure_audio_file_on_disk(call)
+                provider = get_stt_provider()
 
-    background_tasks.add_task(
-        _run_pipeline_task,
-        call.id,
-        mode=mode,
+                callback_url = None
+
+                if settings.effective_public_base_url:
+                    callback_url = (
+                        f"{settings.effective_public_base_url}"
+                        "/api/webhooks/sarvam"
+                    )
+
+                    if settings.sarvam_webhook_token:
+                        callback_url += (
+                            f"?token={settings.sarvam_webhook_token}"
+                        )
+
+                job_id, err = provider.start_batch_job(
+                    audio_path=audio_path,
+                    mode=mode,
+                    callback_url=callback_url,
+                    callback_token=(
+                        settings.sarvam_webhook_token or None
+                    ),
+                )
+
+                if job_id:
+                    call.sarvam_job_id = job_id
+                    call.status = "transcribing"
+                    call.failure_reason = None
+
+                    db.commit()
+                    db.refresh(call)
+
+                    logger.info(
+                        "Call %d dispatched to Sarvam async job %s",
+                        call.id,
+                        job_id,
+                    )
+
+                    return
+
+                logger.warning(
+                    "Failed to start Sarvam batch job for call %d: %s",
+                    call.id,
+                    err,
+                )
+
+                call.status = "failed"
+                call.failure_reason = (
+                    err.get("detail") if err else None
+                ) or "Failed to start Sarvam batch job"
+
+                db.commit()
+                db.refresh(call)
+                return
+
+            except Exception as exc:
+                logger.exception(
+                    "Error initiating Sarvam batch job for call %d",
+                    call.id,
+                )
+
+                call.status = "failed"
+                call.failure_reason = str(exc)
+
+                db.commit()
+                db.refresh(call)
+                return
+
+        # Local Sarvam execution uses the existing synchronous pipeline.
+        background_tasks.add_task(
+            _run_pipeline_task,
+            call.id,
+            mode=mode,
+        )
+        return
+
+    # ------------------------------------------------------------------
+    # INVALID PROVIDER
+    # ------------------------------------------------------------------
+    call.status = "failed"
+    call.failure_reason = (
+        f"Unsupported STT_PROVIDER '{settings.stt_provider}'. "
+        "Expected 'groq' or 'sarvam'."
     )
 
+    db.commit()
+    db.refresh(call)
+
+    logger.error(
+        "Unsupported STT provider '%s' for call %d",
+        settings.stt_provider,
+        call.id,
+    )
 
 def _compute_file_hash(path: Path) -> str:
     """Compute SHA-256 hash for an uploaded file."""
@@ -481,6 +540,13 @@ async def upload_call(
     if existing:
         tmp_path.unlink()
 
+        # Always refresh durable audio_data from the newly uploaded bytes.
+        # This fixes the case where an older record only had a temporary
+        # Vercel file_path and that file no longer exists.
+        existing.audio_data = file_bytes
+        existing.file_size_bytes = file_size
+        existing.original_filename = file.filename or existing.original_filename
+
         if existing.status == "failed":
             logger.info(
                 "Retrying failed call_id=%d on re-upload",
@@ -490,9 +556,6 @@ async def upload_call(
             existing.status = "uploaded"
             existing.failure_reason = None
             existing.transcription_mode = mode
-
-            if not existing.audio_data:
-                existing.audio_data = file_bytes
 
             db.commit()
             db.refresh(existing)
@@ -506,9 +569,25 @@ async def upload_call(
 
             return existing
 
+        # A duplicate that is already being processed should not create a
+        # second STT job. The audio bytes above are still persisted.
+        if existing.status in ("uploaded", "transcribing", "analyzing"):
+            db.commit()
+            db.refresh(existing)
+
+            logger.info(
+                "Duplicate upload detected; existing call_id=%d is already %s",
+                existing.id,
+                existing.status,
+            )
+
+            return existing
+
+        db.commit()
+        db.refresh(existing)
+
         logger.info(
-            "Duplicate upload detected; "
-            "returning existing call_id=%d",
+            "Duplicate upload detected; returning existing call_id=%d",
             existing.id,
         )
 
@@ -589,26 +668,65 @@ def _run_pipeline_task(
     """
     Background task wrapper.
 
-    Creates a fresh database session, runs transcription, and then
-    automatically evaluates the call when transcription succeeds.
+    Creates a fresh database session, restores durable audio_data when the
+    current filesystem no longer contains the uploaded file, runs the
+    transcription pipeline, and automatically evaluates the call after a
+    successful transcription.
     """
     from app.db.engine import SessionLocal
 
     db = SessionLocal()
 
     try:
+        call = db.get(Call, call_id)
+
+        if call is None:
+            logger.error(
+                "Background transcription: call_id=%d not found",
+                call_id,
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # Restore durable audio for serverless environments.
+        # ------------------------------------------------------------------
+        try:
+            audio_path = _ensure_audio_file_on_disk(call)
+            db.commit()
+
+            logger.info(
+                "Audio ready for call %d at %s",
+                call_id,
+                audio_path,
+            )
+        except Exception as audio_exc:
+            logger.exception(
+                "Could not restore audio for call %d",
+                call_id,
+            )
+
+            call.status = "failed"
+            call.failure_reason = (
+                f"audio_restore_failed: {audio_exc}"
+            )
+            db.commit()
+            return
+
+        # ------------------------------------------------------------------
+        # Existing transcription pipeline.
+        # ------------------------------------------------------------------
         run_transcription_pipeline(
             call_id,
             db,
             mode=mode,
         )
 
-        call = db.get(
-            Call,
-            call_id,
-        )
+        db.refresh(call)
 
-        if call and call.status == "transcribed":
+        # ------------------------------------------------------------------
+        # Existing evaluation pipeline.
+        # ------------------------------------------------------------------
+        if call.status == "transcribed":
             try:
                 run_evaluation_pipeline(
                     call_id,
@@ -622,10 +740,35 @@ def _run_pipeline_task(
 
             except Exception as eval_exc:
                 logger.exception(
-                    "Evaluation pipeline failed for call %d: %s",
+                    "Evaluation pipeline failed for call %d",
                     call_id,
-                    eval_exc,
                 )
+
+                # Keep the successful transcript status. Evaluation is a
+                # separate stage and should not turn a valid transcript into
+                # a transcription failure.
+                call.failure_reason = (
+                    f"evaluation_failed: {eval_exc}"
+                )
+                db.commit()
+
+    except Exception as exc:
+        logger.exception(
+            "Unexpected background pipeline failure for call %d",
+            call_id,
+        )
+
+        try:
+            call = db.get(Call, call_id)
+            if call:
+                call.status = "failed"
+                call.failure_reason = str(exc)
+                db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to persist background pipeline error for call %d",
+                call_id,
+            )
 
     finally:
         db.close()
