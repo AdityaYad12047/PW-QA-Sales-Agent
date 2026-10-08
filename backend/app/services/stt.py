@@ -594,159 +594,67 @@ class GroqSTT(SpeechToText):
         started = time.monotonic()
 
         try:
-            with open(
-                audio_path,
-                "rb",
-            ) as audio_file:
+            suffix = audio_path.suffix.lower()
 
-                suffix = (
-                    audio_path.suffix.lower()
+            mime_types = {
+                ".mp3": "audio/mpeg",
+                ".wav": "audio/wav",
+                ".m4a": "audio/mp4",
+                ".ogg": "audio/ogg",
+                ".flac": "audio/flac",
+                ".aac": "audio/aac",
+                ".webm": "audio/webm",
+            }
+
+            mime_type = mime_types.get(
+                suffix,
+                "application/octet-stream",
+            )
+
+            # Read the complete file into bytes. This avoids multipart
+            # serialization problems with file handles in serverless runtimes.
+            audio_bytes = audio_path.read_bytes()
+
+            files = {
+                "file": (
+                    audio_path.name,
+                    audio_bytes,
+                    mime_type,
+                )
+            }
+
+            form_data = {
+                "model": self.MODEL,
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": "segment",
+                "temperature": "0",
+                "prompt": self._prompt_for_mode(mode),
+            }
+
+            language = self._language_for_mode(mode)
+
+            if language:
+                form_data["language"] = language
+
+            headers = {
+                "Authorization": f"Bearer {self._api_key}",
+            }
+
+            with httpx.Client(
+                timeout=self.REQUEST_TIMEOUT_SECONDS
+            ) as client:
+                response = client.post(
+                    self.API_URL,
+                    headers=headers,
+                    files=files,
+                    data=form_data,
                 )
 
-                mime_types = {
-                    ".mp3": "audio/mpeg",
-                    ".wav": "audio/wav",
-                    ".m4a": "audio/mp4",
-                    ".ogg": "audio/ogg",
-                    ".flac": "audio/flac",
-                    ".aac": "audio/aac",
-                    ".webm": "audio/webm",
-                }
-
-                mime_type = mime_types.get(
-                    suffix,
-                    "application/octet-stream",
-                )
-
-                files = {
-                    "file": (
-                        audio_path.name,
-                        audio_file,
-                        mime_type,
-                    )
-                }
-
-                data = [
-                    (
-                        "model",
-                        self.MODEL,
-                    ),
-                    (
-                        "response_format",
-                        "verbose_json",
-                    ),
-                    (
-                        "timestamp_granularities[]",
-                        "segment",
-                    ),
-                    (
-                        "temperature",
-                        "0",
-                    ),
-                    (
-                        "prompt",
-                        self._prompt_for_mode(
-                            mode
-                        ),
-                    ),
-                ]
-
-                language = (
-                    self._language_for_mode(
-                        mode
-                    )
-                )
-
-                if language:
-                    data.append(
-                        (
-                            "language",
-                            language,
-                        )
-                    )
-
-                headers = {
-                    "Authorization": (
-                        f"Bearer {self._api_key}"
-                    )
-                }
-
-                with httpx.Client(
-                    timeout=self.REQUEST_TIMEOUT_SECONDS
-                ) as client:
-
-                    response = client.post(
-                        self.API_URL,
-                        headers=headers,
-                        files=files,
-                        data=data,
-                    )
-
-            # -----------------------------------------------------------------
-            # HTTP error
-            # -----------------------------------------------------------------
-
-            if response.status_code >= 400:
-                detail = response.text
-
-                try:
-                    error_json = (
-                        response.json()
-                    )
-
-                    error_detail = (
-                        error_json.get(
-                            "error"
-                        )
-                        or error_json
-                    )
-
-                    detail = json.dumps(
-                        error_detail,
-                        ensure_ascii=False,
-                    )
-
-                except Exception:
-                    pass
-
-                error_lower = detail.lower()
-
-                if response.status_code == 401:
-                    reason = "auth_error"
-
-                elif response.status_code == 429:
-                    reason = "rate_limit"
-
-                elif (
-                    "quota" in error_lower
-                    or "limit" in error_lower
-                ):
-                    reason = "quota_error"
-
-                elif response.status_code >= 500:
-                    reason = "provider_error"
-
-                else:
-                    reason = "provider_error"
-
-                return STTResult(
-                    success=False,
-                    provider=self.PROVIDER,
-                    model=self.MODEL,
-                    failure_reason=reason,
-                    failure_detail=(
-                        f"Groq HTTP {response.status_code}: "
-                        f"{detail}"
-                    ),
-                    latency_ms=int(
-                        (
-                            time.monotonic()
-                            - started
-                        )
-                        * 1000
-                    ),
-                    mode=mode,
-                )
+                # Convert non-2xx Groq responses into an explicit HTTP error
+                # so the failure shown in the application contains the actual
+                # provider response instead of being misreported as an empty
+                # transcript.
+                response.raise_for_status()
 
             # -----------------------------------------------------------------
             # Parse response
@@ -761,44 +669,27 @@ class GroqSTT(SpeechToText):
                     model=self.MODEL,
                     failure_reason="invalid_response",
                     failure_detail=(
-                        "Groq returned a non-JSON "
-                        f"response: {exc}"
+                        "Groq returned a non-JSON response: "
+                        f"{exc}"
                     ),
                     mode=mode,
                 )
 
             raw_transcript = str(
-                payload.get(
-                    "text",
-                    ""
-                )
-                or ""
+                payload.get("text", "") or ""
             ).strip()
 
-            raw_segments = payload.get(
-                "segments",
-                [],
-            )
+            raw_segments = payload.get("segments", [])
 
             entries: list[DiarizedEntry] = []
 
-            if isinstance(
-                raw_segments,
-                list,
-            ):
+            if isinstance(raw_segments, list):
                 for segment in raw_segments:
-                    if not isinstance(
-                        segment,
-                        dict,
-                    ):
+                    if not isinstance(segment, dict):
                         continue
 
                     text = str(
-                        segment.get(
-                            "text",
-                            ""
-                        )
-                        or ""
+                        segment.get("text", "") or ""
                     ).strip()
 
                     if not text:
@@ -806,42 +697,22 @@ class GroqSTT(SpeechToText):
 
                     try:
                         start = float(
-                            segment.get(
-                                "start",
-                                0.0,
-                            )
-                            or 0.0
+                            segment.get("start", 0.0) or 0.0
                         )
-
                         end = float(
-                            segment.get(
-                                "end",
-                                start,
-                            )
-                            or start
+                            segment.get("end", start) or start
                         )
-
-                    except (
-                        TypeError,
-                        ValueError,
-                    ):
+                    except (TypeError, ValueError):
                         start = 0.0
                         end = 0.0
 
                     entries.append(
                         DiarizedEntry(
-                            # Groq Whisper does not provide
-                            # speaker diarization.
+                            # Groq Whisper does not provide speaker diarization.
                             speaker_label="speaker_0",
                             text=text,
-                            start_time_seconds=max(
-                                0.0,
-                                start,
-                            ),
-                            end_time_seconds=max(
-                                start,
-                                end,
-                            ),
+                            start_time_seconds=max(0.0, start),
+                            end_time_seconds=max(start, end),
                         )
                     )
 
@@ -849,16 +720,9 @@ class GroqSTT(SpeechToText):
             # Fallback when verbose_json contains text but no segments.
             # -----------------------------------------------------------------
 
-            if (
-                not entries
-                and raw_transcript
-            ):
+            if not entries and raw_transcript:
                 duration = float(
-                    payload.get(
-                        "duration",
-                        0.0,
-                    )
-                    or 0.0
+                    payload.get("duration", 0.0) or 0.0
                 )
 
                 entries = [
@@ -870,25 +734,17 @@ class GroqSTT(SpeechToText):
                     )
                 ]
 
-            if (
-                not entries
-                and not raw_transcript
-            ):
+            if not entries and not raw_transcript:
                 return STTResult(
                     success=False,
                     provider=self.PROVIDER,
                     model=self.MODEL,
                     failure_reason="empty_transcript",
                     failure_detail=(
-                        "Groq returned no transcript "
-                        "text or segments."
+                        "Groq returned no transcript text or segments."
                     ),
                     latency_ms=int(
-                        (
-                            time.monotonic()
-                            - started
-                        )
-                        * 1000
+                        (time.monotonic() - started) * 1000
                     ),
                     mode=mode,
                 )
@@ -897,9 +753,7 @@ class GroqSTT(SpeechToText):
             # Duration
             # -----------------------------------------------------------------
 
-            response_duration = payload.get(
-                "duration"
-            )
+            response_duration = payload.get("duration")
 
             try:
                 duration = (
@@ -907,10 +761,7 @@ class GroqSTT(SpeechToText):
                     if response_duration is not None
                     else None
                 )
-            except (
-                TypeError,
-                ValueError,
-            ):
+            except (TypeError, ValueError):
                 duration = None
 
             if not duration and entries:
@@ -923,30 +774,19 @@ class GroqSTT(SpeechToText):
             # Detected language
             # -----------------------------------------------------------------
 
-            detected_language = (
-                payload.get("language")
-                or None
-            )
+            detected_language = payload.get("language") or None
 
             if detected_language == "hi":
                 detected_language = "hi-IN"
-
             elif detected_language == "en":
                 detected_language = "en-IN"
-
             elif not detected_language:
-                requested_language = (
-                    self._language_for_mode(
-                        mode
-                    )
-                )
+                requested_language = self._language_for_mode(mode)
 
                 if requested_language == "hi":
                     detected_language = "hi-IN"
-
                 elif requested_language == "en":
                     detected_language = "en-IN"
-
                 else:
                     detected_language = "auto"
 
@@ -962,18 +802,12 @@ class GroqSTT(SpeechToText):
                 model=self.MODEL,
                 audio_duration_seconds=duration,
                 latency_ms=int(
-                    (
-                        time.monotonic()
-                        - started
-                    )
-                    * 1000
+                    (time.monotonic() - started) * 1000
                 ),
                 # Do not invent INR conversion here.
                 # Groq pricing is documented in USD/hour.
                 estimated_cost_inr=None,
-                detected_language=(
-                    detected_language
-                ),
+                detected_language=detected_language,
                 mode=mode,
             )
 
@@ -996,31 +830,52 @@ class GroqSTT(SpeechToText):
 
             return result
 
+        except httpx.HTTPStatusError as exc:
+            response_text = exc.response.text[:2000]
+            logger.error(
+                "Groq HTTP error %s: %s",
+                exc.response.status_code,
+                response_text,
+            )
+
+            reason = "provider_error"
+            if exc.response.status_code in {401, 403}:
+                reason = "auth_error"
+            elif exc.response.status_code == 429:
+                reason = "rate_limit"
+
+            return STTResult(
+                success=False,
+                provider=self.PROVIDER,
+                model=self.MODEL,
+                failure_reason=reason,
+                failure_detail=(
+                    f"Groq HTTP {exc.response.status_code}: "
+                    f"{response_text}"
+                ),
+                latency_ms=int(
+                    (time.monotonic() - started) * 1000
+                ),
+                mode=mode,
+            )
+
         except httpx.TimeoutException as exc:
+            logger.exception("Groq request timed out")
 
             return STTResult(
                 success=False,
                 provider=self.PROVIDER,
                 model=self.MODEL,
                 failure_reason="timeout",
-                failure_detail=(
-                    f"Groq request timed out: {exc}"
-                ),
+                failure_detail=f"Groq request timed out: {exc}",
                 latency_ms=int(
-                    (
-                        time.monotonic()
-                        - started
-                    )
-                    * 1000
+                    (time.monotonic() - started) * 1000
                 ),
                 mode=mode,
             )
 
         except httpx.RequestError as exc:
-
-            logger.exception(
-                "Groq network error"
-            )
+            logger.exception("Groq network error")
 
             return STTResult(
                 success=False,
@@ -1029,20 +884,13 @@ class GroqSTT(SpeechToText):
                 failure_reason="network_error",
                 failure_detail=str(exc),
                 latency_ms=int(
-                    (
-                        time.monotonic()
-                        - started
-                    )
-                    * 1000
+                    (time.monotonic() - started) * 1000
                 ),
                 mode=mode,
             )
 
         except Exception as exc:
-
-            logger.exception(
-                "Unexpected Groq STT error"
-            )
+            logger.exception("Unexpected Groq STT error")
 
             return STTResult(
                 success=False,
@@ -1051,11 +899,7 @@ class GroqSTT(SpeechToText):
                 failure_reason="unexpected_error",
                 failure_detail=str(exc),
                 latency_ms=int(
-                    (
-                        time.monotonic()
-                        - started
-                    )
-                    * 1000
+                    (time.monotonic() - started) * 1000
                 ),
                 mode=mode,
             )
