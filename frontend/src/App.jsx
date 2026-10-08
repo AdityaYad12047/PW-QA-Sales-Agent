@@ -151,7 +151,7 @@ export default function App() {
   // ── Polling for asynchronous transcription/evaluation lifecycle ──────────
   useEffect(() => {
     if (!currentCall?.id) return;
-    const pendingStatuses = ['uploaded', 'transcribing'];
+   const pendingStatuses = ['uploaded', 'transcribing', 'analyzing'];
     if (!pendingStatuses.includes(currentCall.status)) return;
 
     const intervalId = setInterval(async () => {
