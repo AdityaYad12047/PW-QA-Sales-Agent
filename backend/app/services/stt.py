@@ -348,7 +348,7 @@ class GroqSTT(SpeechToText):
         verbose_json
 
     Timestamp granularity:
-        segment
+        segment + word
 
     Important:
         Groq Whisper does not provide speaker diarization through this
@@ -626,7 +626,7 @@ class GroqSTT(SpeechToText):
             form_data = {
                 "model": self.MODEL,
                 "response_format": "verbose_json",
-                "timestamp_granularities[]": "segment",
+                "timestamp_granularities[]": ["segment", "word"],
                 "temperature": "0",
                 "prompt": self._prompt_for_mode(mode),
             }
