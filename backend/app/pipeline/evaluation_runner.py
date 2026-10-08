@@ -54,6 +54,28 @@ from app.services.llm import BaseLLMClient, ClaudeClient, get_llm_client
 logger = logging.getLogger("pw_qa.pipeline.evaluation")
 
 
+_ALWAYS_APPLICABLE_CRITERIA = {
+    "discovery",
+    "course_fit",
+    "pitch_quality",
+    "closing_next_steps",
+}
+
+
+def _normalise_evaluator_na_flags(evaluations):
+    """Treat missing evidence as poor performance, not N/A."""
+    for item in evaluations:
+        if item.criterion_id in _ALWAYS_APPLICABLE_CRITERIA and item.not_applicable:
+            item.not_applicable = False
+            if not item.evidence:
+                item.score = 0
+                item.rationale = (
+                    (item.rationale or "No evidence found.")
+                    + " No verified evidence was found in the transcript."
+                )
+    return evaluations
+
+
 def run_evaluation_pipeline(
     call_id: int,
     db: Session,
@@ -171,6 +193,11 @@ def run_evaluation_pipeline(
             )
         )
         db.flush()
+
+        # Prevent N/A from being used as a synonym for missing evidence.
+        eval_model.evaluations = _normalise_evaluator_na_flags(
+            eval_model.evaluations
+        )
 
         # Evidence verification for Call 1
         verified_criteria, log_1, retry_errs_1 = verify_rubric_evaluations(
